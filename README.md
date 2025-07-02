@@ -3,9 +3,10 @@
 Um aplicativo desktop moderno e intuitivo para monitoramento de ações e criptomoedas em tempo real, desenvolvido em Python com interface gráfica Tkinter.
 
 ![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)
+<!--
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
-
+-->
 ## 🚀 Características
 
 ### 📊 Monitoramento de Ativos
