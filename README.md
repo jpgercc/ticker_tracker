@@ -2,7 +2,8 @@
 
 Um aplicativo web desenvolvido em Streamlit para monitoramento de ações e criptomoedas em tempo real.
 
-![Image](https://github.com/user-attachments/assets/f538444a-c2a8-4027-a3e8-d89283630317)
+![Image](https://github.com/user-attachments/assets/0aea8633-fb1b-464e-845c-574ef21a8e7a)
+![Image](https://github.com/user-attachments/assets/4346652e-d89d-4d1a-9ff9-b68fee2fd468)
 
 ## O que o app faz
 
