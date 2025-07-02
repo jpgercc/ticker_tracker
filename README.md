@@ -7,6 +7,9 @@ Um aplicativo desktop moderno e intuitivo para monitoramento de ações e cripto
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
 -->
+
+![Image](https://github.com/user-attachments/assets/1e4dfe10-bb76-4e45-aab9-fa79bb89d5f8)
+
 ## 🚀 Características
 
 ### 📊 Monitoramento de Ativos
