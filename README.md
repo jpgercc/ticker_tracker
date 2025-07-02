@@ -23,6 +23,10 @@ pip install streamlit yfinance requests pandas plotly
 ```bash
 streamlit run main.py
 ```
+ou
+```bash
+python -m streamlit run .\main.py
+```
 
 3. **Acesse no navegador:**
 O app será aberto automaticamente em `http://localhost:8501`
