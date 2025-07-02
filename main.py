@@ -60,6 +60,29 @@ def save_user_assets(assets):
 if 'user_assets' not in st.session_state:
     st.session_state.user_assets = load_user_assets()
 
+# Cache para preços (evita múltiplas chamadas da API)
+if 'price_cache' not in st.session_state:
+    st.session_state.price_cache = {}
+
+# Timestamp do cache (para invalidar cache antigo)
+if 'cache_timestamp' not in st.session_state:
+    st.session_state.cache_timestamp = datetime.now()
+
+def is_cache_valid():
+    """Verifica se o cache ainda é válido (5 minutos)."""
+    return (datetime.now() - st.session_state.cache_timestamp).seconds < 300
+
+def get_cached_price(cache_key):
+    """Obtém preço do cache se válido."""
+    if is_cache_valid() and cache_key in st.session_state.price_cache:
+        return st.session_state.price_cache[cache_key]
+    return None
+
+def set_cached_price(cache_key, price):
+    """Armazena preço no cache."""
+    st.session_state.price_cache[cache_key] = price
+    st.session_state.cache_timestamp = datetime.now()
+
 # --- Classe AssetTracker (adaptada para Streamlit) ---
 class AssetTracker:
     def __init__(self, api_choice, identifier, display_symbol, purchase_date=None, quantity=None, purchase_price=None):
@@ -84,9 +107,25 @@ class AssetTracker:
 
     def get_current_price(self):
         """Obtém o preço atual do ativo."""
+        # Criar chave única para cache
+        cache_key = f"{self.api_choice}_{self.stock_ticker or self.crypto_id}"
+        
+        # Verificar cache primeiro
+        cached_price = get_cached_price(cache_key)
+        if cached_price is not None:
+            return cached_price
+        
+        # Obter novo preço
         if self.api_choice == "coingecko":
-            return self._get_crypto_price()
-        return self._get_stock_price()
+            price = self._get_crypto_price()
+        else:
+            price = self._get_stock_price()
+        
+        # Armazenar no cache
+        if price is not None:
+            set_cached_price(cache_key, price)
+        
+        return price
 
     def _get_crypto_price(self):
         url = f"{self.base_url}/simple/price?ids={self.crypto_id}&vs_currencies=usd"
@@ -229,7 +268,7 @@ def display_asset_info(current_tracker, current_price, historical_data, current_
                       title=f'{current_tracker.display_symbol} - Últimos {len(historical_data)} dias',
                       labels={'x': 'Data', 'y': 'Preço (USD)'})
         fig.update_layout(hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"main_chart_{current_tracker.display_symbol}")
     else:
         st.warning("Dados históricos não disponíveis para o período selecionado.")
 
@@ -254,11 +293,34 @@ def add_asset_form():
         purchase_price = st.number_input("Preço de Compra (USD):", min_value=0.0, format="%.2f", key="add_price")
 
         if st.button("Adicionar Ativo"):
-            if not all([display_name, identifier, purchase_date, quantity, purchase_price]):
-                st.error("Por favor, preencha todos os campos obrigatórios.")
-                return
-            if asset_type == "crypto" and not symbol:
-                st.error("O Símbolo é obrigatório para criptomoedas.")
+            # Validações aprimoradas
+            errors = []
+            
+            if not display_name.strip():
+                errors.append("Nome de Exibição é obrigatório.")
+            if not identifier.strip():
+                errors.append(f"{'Ticker da Ação' if asset_type == 'stock' else 'ID da Criptomoeda'} é obrigatório.")
+            if asset_type == "crypto" and not symbol.strip():
+                errors.append("Símbolo é obrigatório para criptomoedas.")
+            if quantity <= 0:
+                errors.append("Quantidade deve ser maior que zero.")
+            if purchase_price <= 0:
+                errors.append("Preço de Compra deve ser maior que zero.")
+            
+            # Verificar duplicatas
+            identifier_check = identifier.upper() if asset_type == "stock" else identifier.lower()
+            if asset_type == "stock":
+                existing_tickers = [s['ticker'] for s in st.session_state.user_assets['stocks']]
+                if identifier_check in existing_tickers:
+                    errors.append(f"Ação {identifier_check} já existe no portfólio.")
+            else:
+                existing_ids = [c['id'] for c in st.session_state.user_assets['cryptos']]
+                if identifier_check in existing_ids:
+                    errors.append(f"Criptomoeda {identifier_check} já existe no portfólio.")
+            
+            if errors:
+                for error in errors:
+                    st.error(error)
                 return
 
             new_asset = {}
@@ -354,30 +416,36 @@ def calculate_category_totals(category_assets):
     
     # Calcular para ações
     for stock in category_assets['stocks']:
-        total_invested += stock['purchase_price'] * stock['quantity']
-        asset_count += 1
-        
-        # Obter preço atual
         try:
+            total_invested += stock['purchase_price'] * stock['quantity']
+            asset_count += 1
+            
+            # Obter preço atual
             tracker = AssetTracker("yahoo_stock", stock['ticker'], stock['display_name'])
             current_price = tracker.get_current_price()
             if current_price:
                 total_current += current_price * stock['quantity']
-        except:
+            else:
+                total_current += stock['purchase_price'] * stock['quantity']  # Fallback
+        except Exception as e:
+            st.warning(f"Erro ao processar ação {stock.get('display_name', 'N/A')}: {e}")
             total_current += stock['purchase_price'] * stock['quantity']  # Fallback
     
     # Calcular para criptomoedas
     for crypto in category_assets['cryptos']:
-        total_invested += crypto['purchase_price'] * crypto['quantity']
-        asset_count += 1
-        
-        # Obter preço atual
         try:
+            total_invested += crypto['purchase_price'] * crypto['quantity']
+            asset_count += 1
+            
+            # Obter preço atual
             tracker = AssetTracker("coingecko", crypto['id'], crypto['display_name'])
             current_price = tracker.get_current_price()
             if current_price:
                 total_current += current_price * crypto['quantity']
-        except:
+            else:
+                total_current += crypto['purchase_price'] * crypto['quantity']  # Fallback
+        except Exception as e:
+            st.warning(f"Erro ao processar cripto {crypto.get('display_name', 'N/A')}: {e}")
             total_current += crypto['purchase_price'] * crypto['quantity']  # Fallback
     
     return {
@@ -391,6 +459,11 @@ def calculate_category_totals(category_assets):
 def show_portfolio_overview():
     """Mostra visão geral organizada do portfólio."""
     st.title("📊 Visão Geral do Portfólio")
+    
+    # Verificar se existem ativos
+    if not st.session_state.user_assets.get('stocks') and not st.session_state.user_assets.get('cryptos'):
+        st.info("Nenhum ativo encontrado no portfólio. Adicione alguns ativos para ver a visão geral.")
+        return
     
     categories = organize_assets_by_category(st.session_state.user_assets)
     
@@ -518,16 +591,26 @@ def show_portfolio_overview():
         
         df_chart = pd.DataFrame(chart_data)
         
-        # Gráfico de pizza para distribuição
-        fig_pie = px.pie(df_chart, values='Valor Investido', names='Categoria',
-                        title='Distribuição do Investimento por Categoria')
-        st.plotly_chart(fig_pie, use_container_width=True)
-        
-        # Gráfico de barras comparativo
-        fig_bar = px.bar(df_chart, x='Categoria', y=['Valor Investido', 'Valor Atual'],
-                        title='Comparação: Valor Investido vs Valor Atual por Categoria',
-                        barmode='group')
-        st.plotly_chart(fig_bar, use_container_width=True)
+        # Verificar se há dados suficientes para exibir gráficos
+        if not df_chart.empty and df_chart['Valor Investido'].sum() > 0:
+            # Gráfico de pizza para distribuição
+            fig_pie = px.pie(df_chart, values='Valor Investido', names='Categoria',
+                            title='Distribuição do Investimento por Categoria')
+            fig_pie.update_layout(showlegend=True)
+            st.plotly_chart(fig_pie, use_container_width=True, key="portfolio_pie_chart")
+            
+            # Gráfico de barras comparativo
+            fig_bar = px.bar(df_chart, x='Categoria', y=['Valor Investido', 'Valor Atual'],
+                            title='Comparação: Valor Investido vs Valor Atual por Categoria',
+                            barmode='group')
+            fig_bar.update_layout(
+                xaxis_title="Categoria",
+                yaxis_title="Valor (USD)",
+                legend_title="Tipo de Valor"
+            )
+            st.plotly_chart(fig_bar, use_container_width=True, key="portfolio_bar_chart")
+        else:
+            st.info("Dados insuficientes para gerar gráficos de distribuição.")
 
 # --- Layout Principal do Streamlit ---
 st.set_page_config(layout="wide", page_title="Monitor de Ativos")
@@ -600,6 +683,9 @@ else:
         
         st.sidebar.markdown("---")
         if st.sidebar.button("Atualizar Dados"):
+            # Limpar cache ao atualizar dados
+            st.session_state.price_cache = {}
+            st.session_state.cache_timestamp = datetime.now()
             st.rerun() # Força o recarregamento dos dados
 
         # Placeholder para a mensagem de carregamento
@@ -642,40 +728,45 @@ else:
                     identifier_search = search_term.lower() if search_asset_type == "crypto" else search_term.upper()
                     display_name_search = search_term.upper() # Usar o próprio termo de busca como display name
                     
-                    # Criar um AssetTracker temporário para a busca
-                    searched_tracker = AssetTracker(
-                        api_choice=api_choice_search,
-                        identifier=identifier_search,
-                        display_symbol=display_name_search
-                    )
-                    
-                    search_loading_placeholder = st.empty()
-                    search_loading_placeholder.info(f"Buscando informações para {display_name_search}...")
-                    
-                    searched_price = searched_tracker.get_current_price()
-                    searched_historical_data = searched_tracker.get_historical_data(CHART_PERIODS[current_period_key])
-
-                    search_loading_placeholder.empty() # Limpa a mensagem de "buscando"
-
-                    if searched_price is not None or not searched_historical_data.empty:
-                        st.subheader(f"Resultado da Busca: {display_name_search}")
-                        st.write(f"**💰 Preço atual:** {searched_tracker.format_price(searched_price)}")
+                    try:
+                        # Criar um AssetTracker temporário para a busca
+                        searched_tracker = AssetTracker(
+                            api_choice=api_choice_search,
+                            identifier=identifier_search,
+                            display_symbol=display_name_search
+                        )
                         
-                        if not searched_historical_data.empty:
-                            fig_search = px.line(searched_historical_data, x=searched_historical_data.index, y=searched_historical_data.values,
-                                                 title=f'{display_name_search} - Histórico',
-                                                 labels={'x': 'Data', 'y': 'Preço (USD)'})
-                            fig_search.update_layout(hovermode="x unified")
-                            st.plotly_chart(fig_search, use_container_width=True)
+                        search_loading_placeholder = st.empty()
+                        search_loading_placeholder.info(f"Buscando informações para {display_name_search}...")
+                        
+                        searched_price = searched_tracker.get_current_price()
+                        searched_historical_data = searched_tracker.get_historical_data(CHART_PERIODS[current_period_key])
+
+                        search_loading_placeholder.empty() # Limpa a mensagem de "buscando"
+
+                        if searched_price is not None or not searched_historical_data.empty:
+                            st.subheader(f"Resultado da Busca: {display_name_search}")
+                            st.write(f"**💰 Preço atual:** {searched_tracker.format_price(searched_price)}")
+                            
+                            if not searched_historical_data.empty:
+                                fig_search = px.line(searched_historical_data, x=searched_historical_data.index, y=searched_historical_data.values,
+                                                     title=f'{display_name_search} - Histórico',
+                                                     labels={'x': 'Data', 'y': 'Preço (USD)'})
+                                fig_search.update_layout(hovermode="x unified")
+                                st.plotly_chart(fig_search, use_container_width=True, key=f"search_chart_{search_term}")
+                            else:
+                                st.warning("Não foi possível obter dados históricos para este ativo.")
+
+                            search_chart_link = searched_tracker.get_chart_link()
+                            if search_chart_link:
+                                st.markdown(f"[Ver Gráfico Completo]({search_chart_link})", unsafe_allow_html=True)
+
                         else:
-                            st.warning("Não foi possível obter dados históricos para este ativo.")
-
-                        search_chart_link = searched_tracker.get_chart_link()
-                        if search_chart_link:
-                            st.markdown(f"[Ver Gráfico Completo]({search_chart_link})", unsafe_allow_html=True)
-
-                    else:
-                        st.warning(f"Não foi possível encontrar informações para '{search_term}'. Verifique o Ticker/ID.")
+                            st.warning(f"Não foi possível encontrar informações para '{search_term}'. Verifique o Ticker/ID.")
+                    
+                    except Exception as e:
+                        search_loading_placeholder.empty()
+                        st.error(f"Erro ao buscar ativo '{search_term}': {str(e)}")
                 else:
                     st.warning("Por favor, digite um Ticker/ID para buscar.")
 
@@ -684,7 +775,19 @@ else:
     add_asset_form()
     remove_asset_form()
 
-# Exibir visão geral do portfólio
-st.sidebar.markdown("---")
-if st.sidebar.button("Visão Geral do Portfólio"):
-    show_portfolio_overview()
+## Exibir visão geral do portfólio
+#st.sidebar.markdown("---")
+#if st.sidebar.button("Visão Geral do Portfólio"):
+#    show_portfolio_overview()
+
+# Botão para limpar cache
+if st.sidebar.button("🔄 Limpar Cache"):
+    st.session_state.price_cache = {}
+    st.session_state.cache_timestamp = datetime.now()
+    st.sidebar.success("Cache limpo com sucesso!")
+    st.rerun()
+
+# Informações do cache
+cache_age = (datetime.now() - st.session_state.cache_timestamp).seconds
+cache_items = len(st.session_state.price_cache)
+st.sidebar.caption(f"Cache: {cache_items} itens, {cache_age}s atrás")
