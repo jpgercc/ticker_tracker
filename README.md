@@ -41,7 +41,7 @@ Um aplicativo desktop moderno e intuitivo para monitoramento de ações e cripto
 
 ### 1. Clone ou baixe o projeto
 ```bash
-git clone https://github.com/seu-usuario/monitor-ativos.git
+git clone https://github.com/jpgercc/ticker_tracker
 cd monitor-ativos
 ```
 
