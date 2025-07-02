@@ -1,17 +1,13 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import streamlit as st
 import yfinance as yf
 import requests
-import threading
-from datetime import datetime, timedelta
-import webbrowser
 import json
 import os
+from datetime import datetime, timedelta
+import pandas as pd
+import plotly.express as px
 
-tempo_grafico = 30  # Dias para o histórico
-
+# --- Configurações Iniciais ---
 # Períodos disponíveis para gráfico
 CHART_PERIODS = {
     "30 dias": 30,
@@ -28,6 +24,7 @@ CHART_PERIODS = {
 # Arquivo para salvar configurações
 CONFIG_FILE = "assets_config.json"
 
+# --- Funções de Carregamento/Salvamento de Ativos ---
 def load_user_assets():
     """Carrega ativos do arquivo de configuração."""
     if os.path.exists(CONFIG_FILE):
@@ -37,7 +34,7 @@ def load_user_assets():
         except (json.JSONDecodeError, FileNotFoundError):
             pass
     
-    # Retorna configuração padrão se arquivo não existir
+    # Retorna configuração padrão se arquivo não existir ou houver erro
     return {
         "stocks": [
             {"ticker": "PETR4.SA", "display_name": "Petrobras", "purchase_date": "2023-01-15", "quantity": 100, "purchase_price": 25.00},
@@ -56,12 +53,14 @@ def save_user_assets(assets):
             json.dump(assets, f, indent=2, ensure_ascii=False)
         return True
     except Exception as e:
-        print(f"Erro ao salvar configurações: {e}")
+        st.error(f"Erro ao salvar configurações: {e}")
         return False
 
-# Configuração dos ativos do usuário
-USER_ASSETS = load_user_assets()
+# Inicializa USER_ASSETS na sessão do Streamlit
+if 'user_assets' not in st.session_state:
+    st.session_state.user_assets = load_user_assets()
 
+# --- Classe AssetTracker (adaptada para Streamlit) ---
 class AssetTracker:
     def __init__(self, api_choice, identifier, display_symbol, purchase_date=None, quantity=None, purchase_price=None):
         self.api_choice = api_choice
@@ -97,7 +96,7 @@ class AssetTracker:
             data = response.json()
             return float(data[self.crypto_id]['usd'])
         except (requests.exceptions.RequestException, KeyError, ValueError) as e:
-            print(f"Erro ao obter preço de {self.display_symbol}: {e}")
+            st.error(f"Erro ao obter preço de {self.display_symbol}: {e}")
             return None
 
     def _get_stock_price(self):
@@ -106,46 +105,49 @@ class AssetTracker:
             price = ticker.fast_info.last_price
             return float(price) if price else None
         except Exception as e:
-            print(f"Erro ao obter preço de {self.stock_ticker}: {e}")
+            st.error(f"Erro ao obter preço de {self.stock_ticker}: {e}")
             return None
 
-    def get_historical_data(self, days=tempo_grafico):
+    def get_historical_data(self, days_or_period):
         """Obtém dados históricos do ativo."""
         if self.api_choice == "coingecko":
-            return self._get_crypto_history(days)
-        return self._get_stock_history(days)
+            return self._get_crypto_history(days_or_period)
+        return self._get_stock_history(days_or_period)
 
-    def _get_crypto_history(self, days):
+    def _get_crypto_history(self, days_or_period):
         url = f"{self.base_url}/coins/{self.crypto_id}/market_chart"
         
-        # Ajustar parâmetros baseado no período
-        if days == "max":
+        if days_or_period == "max":
             params = {'vs_currency': 'usd', 'days': 'max', 'interval': 'daily'}
-        elif days > 90:
-            params = {'vs_currency': 'usd', 'days': days, 'interval': 'daily'}
+        elif days_or_period > 90:
+            params = {'vs_currency': 'usd', 'days': days_or_period, 'interval': 'daily'}
         else:
-            params = {'vs_currency': 'usd', 'days': days, 'interval': 'daily'}
+            params = {'vs_currency': 'usd', 'days': days_or_period, 'interval': 'daily'}
         
         try:
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
-            return [price[1] for price in data.get('prices', [])]
+            # Retorna um DataFrame para compatibilidade com Plotly
+            df = pd.DataFrame(data.get('prices', []), columns=['timestamp', 'price'])
+            df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df = df.set_index('date')['price']
+            return df
         except (requests.exceptions.RequestException, KeyError) as e:
-            print(f"Erro ao obter histórico de {self.display_symbol}: {e}")
-            return []
+            st.error(f"Erro ao obter histórico de {self.display_symbol}: {e}")
+            return pd.Series()
 
-    def _get_stock_history(self, days):
+    def _get_stock_history(self, days_or_period):
         try:
             ticker = yf.Ticker(self.stock_ticker)
-            if days == "max":
+            if days_or_period == "max":
                 hist = ticker.history(period="max", interval="1d")
             else:
-                hist = ticker.history(period=f"{days}d", interval="1d")
-            return hist['Close'].tolist() if not hist.empty else []
+                hist = ticker.history(period=f"{days_or_period}d", interval="1d")
+            return hist['Close'] if not hist.empty else pd.Series()
         except Exception as e:
-            print(f"Erro ao obter histórico de {self.stock_ticker}: {e}")
-            return []
+            st.error(f"Erro ao obter histórico de {self.stock_ticker}: {e}")
+            return pd.Series()
 
     def format_price(self, price):
         """Formata o preço para exibição."""
@@ -182,605 +184,507 @@ class AssetTracker:
             return f"https://www.coingecko.com/en/coins/{self.crypto_id}"
         return ""
 
-class AssetTrackerGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Monitor de Ativos")
-        self.root.geometry("1200x800")
-        self.root.configure(bg='#f0f0f0')
-        
-        # Variáveis de controle
-        self.current_tracker = None
-        self.chart_link = ""
-        self.current_period = "30 dias"
-        self.user_assets = USER_ASSETS
-        
-        # Configurar estilo
-        self.setup_styles()
-        
-        # Criar interface
-        self.setup_ui()
-        
-    def setup_styles(self):
-        """Configura estilos customizados."""
-        style = ttk.Style()
-        style.theme_use('clam')
-        
-        # Configurar cores
-        style.configure('Title.TLabel', font=('Arial', 16, 'bold'), background='#f0f0f0')
-        style.configure('Subtitle.TLabel', font=('Arial', 12, 'bold'), background='#f0f0f0')
-        style.configure('Info.TLabel', font=('Arial', 10), background='#f0f0f0')
-        style.configure('Success.TLabel', font=('Arial', 10), background='#f0f0f0', foreground='green')
-        style.configure('Error.TLabel', font=('Arial', 10), background='#f0f0f0', foreground='red')
-        
-    def setup_ui(self):
-        """Configura a interface do usuário."""
-        # Frame principal
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Título
-        title_label = ttk.Label(main_frame, text="Monitor de Ativos", style='Title.TLabel')
-        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
-        
-        # Frame esquerdo - Lista de ativos
-        left_frame = ttk.LabelFrame(main_frame, text="Meus Ativos", padding="10")
-        left_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
-        
-        # Notebook para separar ações e criptos
-        self.notebook = ttk.Notebook(left_frame)
-        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Tab Ações
-        stocks_frame = ttk.Frame(self.notebook)
-        self.notebook.add(stocks_frame, text="Ações")
-        self.stocks_listbox = self.setup_asset_list(stocks_frame, self.user_assets["stocks"], "yahoo_stock")
-        
-        # Tab Criptos
-        cryptos_frame = ttk.Frame(self.notebook)
-        self.notebook.add(cryptos_frame, text="Criptomoedas")
-        self.cryptos_listbox = self.setup_asset_list(cryptos_frame, self.user_assets["cryptos"], "coingecko")
-        
-        # Frame direito - Detalhes do ativo
-        right_frame = ttk.LabelFrame(main_frame, text="Detalhes do Ativo", padding="10")
-        right_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Área de informações
-        info_frame = ttk.Frame(right_frame)
-        info_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        # Controles do gráfico
-        controls_frame = ttk.LabelFrame(info_frame, text="Controles", padding="5")
-        controls_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        ttk.Label(controls_frame, text="Período:").grid(row=0, column=0, padx=(0, 5))
-        self.period_var = tk.StringVar(value=self.current_period)
-        period_combo = ttk.Combobox(controls_frame, textvariable=self.period_var, 
-                                   values=list(CHART_PERIODS.keys()), state="readonly", width=15)
-        period_combo.grid(row=0, column=1, padx=(0, 10))
-        period_combo.bind('<<ComboboxSelected>>', self.on_period_change)
-        
-        # Botões de ação
-        ttk.Button(controls_frame, text="Adicionar Ativo", command=self.show_add_asset_dialog).grid(row=0, column=2, padx=(0, 5))
-        ttk.Button(controls_frame, text="Remover Ativo", command=self.remove_selected_asset).grid(row=0, column=3, padx=(0, 5))
-        
-        self.info_text = scrolledtext.ScrolledText(right_frame, width=50, height=12, wrap=tk.WORD)
-        self.info_text.grid(row=1, column=0, columnspan=2, pady=(0, 10), sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Frame para gráfico
-        self.chart_frame = ttk.Frame(right_frame)
-        self.chart_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Botões
-        button_frame = ttk.Frame(right_frame)
-        button_frame.grid(row=3, column=0, columnspan=2, pady=(10, 0))
-        
-        self.refresh_btn = ttk.Button(button_frame, text="Atualizar", command=self.refresh_current_asset)
-        self.refresh_btn.grid(row=0, column=0, padx=(0, 5))
-        
-        self.chart_btn = ttk.Button(button_frame, text="Ver Gráfico Completo", command=self.open_full_chart)
-        self.chart_btn.grid(row=0, column=1)
-        
-        # Frame inferior - Busca personalizada
-        search_frame = ttk.LabelFrame(main_frame, text="Buscar Ativo", padding="10")
-        search_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
-        
-        ttk.Label(search_frame, text="Tipo:").grid(row=0, column=0, padx=(0, 5))
-        self.asset_type_var = tk.StringVar(value="crypto")
-        type_combo = ttk.Combobox(search_frame, textvariable=self.asset_type_var, 
-                                  values=["crypto", "stock"], state="readonly", width=10)
-        type_combo.grid(row=0, column=1, padx=(0, 10))
-        
-        ttk.Label(search_frame, text="Ticker/ID:").grid(row=0, column=2, padx=(0, 5))
-        self.search_entry = ttk.Entry(search_frame, width=20)
-        self.search_entry.grid(row=0, column=3, padx=(0, 10))
-        self.search_entry.bind('<Return>', lambda e: self.search_asset())
-        
-        search_btn = ttk.Button(search_frame, text="Buscar", command=self.search_asset)
-        search_btn.grid(row=0, column=4)
-        
-        # Configurar redimensionamento
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(1, weight=1)
-        left_frame.columnconfigure(0, weight=1)
-        left_frame.rowconfigure(0, weight=1)
-        right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(1, weight=1)  # Mudança aqui para o info_text
-        right_frame.rowconfigure(2, weight=1)  # Mudança aqui para o chart_frame
-        
-        # Variáveis de controle removidas daqui (já estão no __init__)
-        
-    def setup_asset_list(self, parent, assets, api_choice):
-        """Configura a lista de ativos."""
-        # Frame para lista e botões
-        list_frame = ttk.Frame(parent)
-        list_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        listbox = tk.Listbox(list_frame, height=8)
-        listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Scrollbar para a listbox
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
-        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        listbox.configure(yscrollcommand=scrollbar.set)
-        
-        # Preencher lista
-        self.update_listbox(listbox, assets)
-        
-        # Bind para seleção
-        listbox.bind('<<ListboxSelect>>', lambda e: self.on_asset_select(e, assets, api_choice))
-        
-        # Configurar redimensionamento
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(0, weight=1)
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-        
-        return listbox
-    
-    def update_listbox(self, listbox, assets):
-        """Atualiza o conteúdo da listbox."""
-        listbox.delete(0, tk.END)
-        for asset in assets:
-            name = asset.get('display_name', asset.get('ticker', asset.get('id')))
-            ticker = asset.get('ticker', asset.get('symbol', ''))
-            listbox.insert(tk.END, f"{name} ({ticker})")
-        
-    def on_asset_select(self, event, assets, api_choice):
-        """Manipula a seleção de um ativo."""
-        selection = event.widget.curselection()
-        if not selection:
-            return
-            
-        idx = selection[0]
-        asset = assets[idx]
-        
-        # Criar tracker em thread separada para não travar a interface
-        threading.Thread(target=self.load_asset_data, args=(asset, api_choice), daemon=True).start()
-        
-    def load_asset_data(self, asset, api_choice):
-        """Carrega dados do ativo em thread separada."""
-        try:
-            identifier = asset.get('ticker') or asset.get('id')
-            symbol = asset.get('display_name') or asset.get('symbol')
-            
-            self.current_tracker = AssetTracker(
-                api_choice=api_choice,
-                identifier=identifier,
-                display_symbol=symbol,
-                purchase_date=asset['purchase_date'],
-                quantity=asset['quantity'],
-                purchase_price=asset['purchase_price']
-            )
-            
-            # Atualizar interface na thread principal
-            self.root.after(0, self.update_asset_display)
-            
-        except Exception as e:
-            self.root.after(0, lambda: self.show_error(f"Erro ao carregar ativo: {e}"))
-    
-    def update_asset_display(self):
-        """Atualiza a exibição do ativo selecionado."""
-        if not self.current_tracker:
-            return
-            
-        # Mostrar loading
-        self.info_text.delete(1.0, tk.END)
-        self.info_text.insert(tk.END, "Carregando dados...")
-        
-        # Carregar dados em thread separada
-        threading.Thread(target=self.fetch_asset_data, daemon=True).start()
-    
-    def fetch_asset_data(self):
-        """Busca dados do ativo."""
-        try:
-            current_price = self.current_tracker.get_current_price()
-            period_days = CHART_PERIODS[self.current_period]
-            historical_data = self.current_tracker.get_historical_data(period_days)
-            
-            # Atualizar na thread principal
-            self.root.after(0, lambda: self.display_asset_info(current_price, historical_data))
-            
-        except Exception as e:
-            self.root.after(0, lambda: self.show_error(f"Erro ao buscar dados: {e}"))
-    
-    def display_asset_info(self, current_price, historical_data):
-        """Exibe informações do ativo."""
-        # Limpar área de informações
-        self.info_text.delete(1.0, tk.END)
-        
-        # Cabeçalho
-        info = f"{self.current_tracker.display_symbol}\n"
-        info += "=" * 50 + "\n\n"
-        
-        if self.current_tracker.purchase_date and self.current_tracker.purchase_price:
-            info += f"Comprado em: {self.current_tracker.purchase_date}\n"
-            info += f"Preço de compra: {self.current_tracker.format_price(self.current_tracker.purchase_price)}\n"
-            info += f"Quantidade: {self.current_tracker.quantity}\n\n"
-        
+# --- Funções para a Interface Streamlit ---
+def display_asset_info(current_tracker, current_price, historical_data, current_period):
+    """Exibe informações do ativo no Streamlit."""
+    if not current_tracker:
+        st.info("Selecione um ativo na barra lateral para visualizar informações.")
+        return
+
+    st.subheader(current_tracker.display_symbol)
+    st.write("---")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write(f"**💰 Preço atual:** {current_tracker.format_price(current_price)}")
+        if current_tracker.purchase_date and current_tracker.purchase_price:
+            st.write(f"**Comprado em:** {current_tracker.purchase_date}")
+            st.write(f"**Preço de compra:** {current_tracker.format_price(current_tracker.purchase_price)}")
+            st.write(f"**Quantidade:** {current_tracker.quantity}")
+
+    with col2:
         if current_price is None:
-            info += "❌ Não foi possível obter o preço atual\n"
+            st.error("❌ Não foi possível obter o preço atual.")
         else:
-            info += f"💰 Preço atual: {self.current_tracker.format_price(current_price)}\n\n"
-            
-            # Métricas do portfolio
-            metrics = self.current_tracker._calculate_portfolio_metrics(current_price)
+            metrics = current_tracker._calculate_portfolio_metrics(current_price)
             if metrics:
-                info += "📊 ANÁLISE DO INVESTIMENTO:\n"
-                info += f"  {metrics['status']} Variação: {metrics['variation']:+.2f}%\n"
-                info += f"  💵 Valor atual: {self.current_tracker.format_price(metrics['current_value'])}\n"
-                info += f"  💸 Investido: {self.current_tracker.format_price(metrics['purchase_total'])}\n"
+                st.write("### 📊 Análise do Investimento:")
+                st.markdown(f"**{metrics['status']} Variação:** `{metrics['variation']:+.2f}%`")
+                st.write(f"**💵 Valor atual:** {current_tracker.format_price(metrics['current_value'])}")
+                st.write(f"**💸 Investido:** {current_tracker.format_price(metrics['purchase_total'])}")
                 
                 profit_loss = metrics['current_value'] - metrics['purchase_total']
                 profit_emoji = "💚" if profit_loss > 0 else "❤️" if profit_loss < 0 else "💛"
-                info += f"  {profit_emoji} Lucro/Prejuízo: {self.current_tracker.format_price(abs(profit_loss))} {'📈' if profit_loss > 0 else '📉' if profit_loss < 0 else '➡️'}\n\n"
-        
-        if historical_data:
-            info += f"📈 Histórico disponível: {len(historical_data)} dias\n"
-            info += f"📅 Período: {self.current_period}\n"
-        
-        self.info_text.insert(tk.END, info)
-        
-        # Criar gráfico
-        if historical_data:
-            self.create_chart(historical_data)
-        
-        # Salvar link do gráfico
-        self.chart_link = self.current_tracker.get_chart_link()
+                st.markdown(f"**{profit_emoji} Lucro/Prejuízo:** {current_tracker.format_price(abs(profit_loss))} {'📈' if profit_loss > 0 else '📉' if profit_loss < 0 else '➡️'}")
     
-    def create_chart(self, data):
-        """Cria gráfico matplotlib."""
-        # Limpar frame do gráfico
-        for widget in self.chart_frame.winfo_children():
-            widget.destroy()
+    st.write("---")
+
+    if not historical_data.empty:
+        st.write(f"📈 Histórico disponível: {len(historical_data)} dias")
+        st.write(f"📅 Período: {current_period}")
         
-        # Criar figura
-        fig, ax = plt.subplots(figsize=(6, 3))
-        ax.plot(data, linewidth=2, color='#1f77b4')
-        ax.set_title(f'{self.current_tracker.display_symbol} - Últimos {len(data)} dias')
-        ax.set_xlabel('Dias')
-        ax.set_ylabel('Preço (USD)')
-        ax.grid(True, alpha=0.3)
+        # Criar gráfico com Plotly
+        fig = px.line(historical_data, x=historical_data.index, y=historical_data.values,
+                      title=f'{current_tracker.display_symbol} - Últimos {len(historical_data)} dias',
+                      labels={'x': 'Data', 'y': 'Preço (USD)'})
+        fig.update_layout(hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Dados históricos não disponíveis para o período selecionado.")
+
+    chart_link = current_tracker.get_chart_link()
+    if chart_link:
+        st.markdown(f"[Ver Gráfico Completo]({chart_link})", unsafe_allow_html=True)
+
+def add_asset_form():
+    """Formulário para adicionar novo ativo."""
+    with st.expander("Adicionar Novo Ativo"):
+        asset_type = st.radio("Tipo de Ativo:", ("stock", "crypto"), key="add_asset_type")
+
+        display_name = st.text_input("Nome de Exibição:", key="add_display_name")
+        identifier = st.text_input(f"{'Ticker da Ação' if asset_type == 'stock' else 'ID da Criptomoeda'}:", key="add_identifier")
         
-        # Adicionar ao frame
-        canvas = FigureCanvasTkAgg(fig, self.chart_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-    
-    def refresh_current_asset(self):
-        """Atualiza o ativo atual."""
-        if self.current_tracker:
-            self.update_asset_display()
-    
-    def open_full_chart(self):
-        """Abre gráfico completo no navegador."""
-        if self.chart_link:
-            webbrowser.open(self.chart_link)
-        else:
-            messagebox.showwarning("Aviso", "Link do gráfico não disponível.")
-    
-    def search_asset(self):
-        """Busca ativo personalizado."""
-        search_term = self.search_entry.get().strip()
-        if not search_term:
-            messagebox.showwarning("Aviso", "Digite um ticker ou ID para buscar.")
-            return
-        
-        asset_type = self.asset_type_var.get()
-        
+        symbol = None
         if asset_type == "crypto":
-            api_choice = "coingecko"
-            identifier = search_term.lower()
-            symbol = search_term.upper()
-        else:
-            api_choice = "yahoo_stock"
-            identifier = search_term.upper()
-            symbol = identifier
+            symbol = st.text_input("Símbolo (ex: BTC, ETH):", key="add_symbol")
         
-        # Criar asset temporário
-        temp_asset = {
-            "ticker" if asset_type == "stock" else "id": identifier,
-            "display_name": symbol,
-            "symbol": symbol,
-            "purchase_date": None,
-            "quantity": None,
-            "purchase_price": None
-        }
-        
-        # Carregar dados
-        threading.Thread(target=self.load_asset_data, args=(temp_asset, api_choice), daemon=True).start()
-    
-    def show_error(self, message):
-        """Exibe mensagem de erro."""
-        self.info_text.delete(1.0, tk.END)
-        self.info_text.insert(tk.END, f"❌ ERRO: {message}")
-    
-    def on_period_change(self, event=None):
-        """Manipula mudança do período do gráfico."""
-        self.current_period = self.period_var.get()
-        if self.current_tracker:
-            self.update_asset_display()
-    
-    def show_add_asset_dialog(self):
-        """Exibe diálogo para adicionar novo ativo."""
-        dialog = AddAssetDialog(self.root, self.add_asset_callback)
-    
-    def add_asset_callback(self, asset_data):
-        """Callback para adicionar novo ativo."""
-        asset_type = asset_data['type']
-        asset_info = asset_data['data']
-        
-        # Adicionar ao dicionário de ativos
-        if asset_type == 'stock':
-            self.user_assets['stocks'].append(asset_info)
-            self.update_listbox(self.stocks_listbox, self.user_assets['stocks'])
-        else:
-            self.user_assets['cryptos'].append(asset_info)
-            self.update_listbox(self.cryptos_listbox, self.user_assets['cryptos'])
-        
-        # Salvar configurações
-        save_user_assets(self.user_assets)
-        messagebox.showinfo("Sucesso", f"Ativo {asset_info['display_name']} adicionado com sucesso!")
-    
-    def remove_selected_asset(self):
-        """Remove o ativo selecionado."""
-        current_tab = self.notebook.select()
-        tab_text = self.notebook.tab(current_tab, "text")
-        
-        if tab_text == "Ações":
-            listbox = self.stocks_listbox
-            assets = self.user_assets['stocks']
-            asset_type = "ação"
-        else:
-            listbox = self.cryptos_listbox
-            assets = self.user_assets['cryptos']
-            asset_type = "criptomoeda"
-        
-        selection = listbox.curselection()
-        if not selection:
-            messagebox.showwarning("Aviso", f"Selecione uma {asset_type} para remover.")
-            return
-        
-        idx = selection[0]
-        asset_name = assets[idx]['display_name']
-        
-        # Confirmar remoção
-        if messagebox.askyesno("Confirmar", f"Tem certeza que deseja remover {asset_name}?"):
-            # Remover do dicionário
-            assets.pop(idx)
-            
-            # Atualizar listbox
-            self.update_listbox(listbox, assets)
-            
-            # Salvar configurações
-            save_user_assets(self.user_assets)
-            
-            # Limpar exibição se era o ativo atual
-            if self.current_tracker and self.current_tracker.display_symbol == asset_name:
-                self.info_text.delete(1.0, tk.END)
-                self.info_text.insert(tk.END, "Selecione um ativo para visualizar informações.")
-                for widget in self.chart_frame.winfo_children():
-                    widget.destroy()
-                self.current_tracker = None
-            
-            messagebox.showinfo("Sucesso", f"{asset_name} removido com sucesso!")
+        purchase_date = st.date_input("Data de Compra:", datetime.now(), key="add_purchase_date").strftime("%Y-%m-%d")
+        quantity = st.number_input("Quantidade:", min_value=0.0, format="%.6f", key="add_quantity")
+        purchase_price = st.number_input("Preço de Compra (USD):", min_value=0.0, format="%.2f", key="add_price")
 
-class AddAssetDialog:
-    def __init__(self, parent, callback):
-        self.callback = callback
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.title("Adicionar Novo Ativo")
-        self.dialog.geometry("400x500")
-        self.dialog.resizable(True, True)
-        self.dialog.grab_set()  # Modal
-        
-        # Centralizar janela
-        self.dialog.transient(parent)
-        self.center_window()
-        
-        self.setup_ui()
-    
-    def center_window(self):
-        """Centraliza a janela na tela."""
-        self.dialog.update_idletasks()
-        x = (self.dialog.winfo_screenwidth() // 2) - (400 // 2)
-        y = (self.dialog.winfo_screenheight() // 2) - (500 // 2)
-        self.dialog.geometry(f"400x500+{x}+{y}")
-    
-    def setup_ui(self):
-        """Configura a interface do diálogo."""
-        main_frame = ttk.Frame(self.dialog, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Título
-        ttk.Label(main_frame, text="Adicionar Novo Ativo", font=('Arial', 14, 'bold')).pack(pady=(0, 20))
-        
-        # Tipo de ativo
-        type_frame = ttk.Frame(main_frame)
-        type_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(type_frame, text="Tipo de Ativo:").pack(anchor=tk.W)
-        self.asset_type_var = tk.StringVar(value="stock")
-        type_frame_radio = ttk.Frame(type_frame)
-        type_frame_radio.pack(fill=tk.X, pady=(5, 0))
-        
-        ttk.Radiobutton(type_frame_radio, text="Ação", variable=self.asset_type_var, 
-                       value="stock", command=self.on_type_change).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Radiobutton(type_frame_radio, text="Criptomoeda", variable=self.asset_type_var, 
-                       value="crypto", command=self.on_type_change).pack(side=tk.LEFT)
-        
-        # Campo ticker/ID
-        ticker_frame = ttk.Frame(main_frame)
-        ticker_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.ticker_label = ttk.Label(ticker_frame, text="Ticker da Ação:")
-        self.ticker_label.pack(anchor=tk.W)
-        self.ticker_entry = ttk.Entry(ticker_frame, width=30)
-        self.ticker_entry.pack(fill=tk.X, pady=(5, 0))
-        
-        # Nome de exibição
-        name_frame = ttk.Frame(main_frame)
-        name_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(name_frame, text="Nome de Exibição:").pack(anchor=tk.W)
-        self.name_entry = ttk.Entry(name_frame, width=30)
-        self.name_entry.pack(fill=tk.X, pady=(5, 0))
-        
-        # Símbolo (apenas para criptos)
-        self.symbol_frame = ttk.Frame(main_frame)
-        self.symbol_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.symbol_label = ttk.Label(self.symbol_frame, text="Símbolo:")
-        self.symbol_label.pack(anchor=tk.W)
-        self.symbol_entry = ttk.Entry(self.symbol_frame, width=30)
-        self.symbol_entry.pack(fill=tk.X, pady=(5, 0))
-        
-        # Data de compra
-        date_frame = ttk.Frame(main_frame)
-        date_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(date_frame, text="Data de Compra (YYYY-MM-DD):").pack(anchor=tk.W)
-        self.date_entry = ttk.Entry(date_frame, width=30)
-        self.date_entry.pack(fill=tk.X, pady=(5, 0))
-        self.date_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        
-        # Quantidade
-        qty_frame = ttk.Frame(main_frame)
-        qty_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(qty_frame, text="Quantidade:").pack(anchor=tk.W)
-        self.qty_entry = ttk.Entry(qty_frame, width=30)
-        self.qty_entry.pack(fill=tk.X, pady=(5, 0))
-        
-        # Preço de compra
-        price_frame = ttk.Frame(main_frame)
-        price_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        ttk.Label(price_frame, text="Preço de Compra (USD):").pack(anchor=tk.W)
-        self.price_entry = ttk.Entry(price_frame, width=30)
-        self.price_entry.pack(fill=tk.X, pady=(5, 0))
-        
-        # Botões
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X)
-        
-        ttk.Button(button_frame, text="Cancelar", command=self.dialog.destroy).pack(side=tk.RIGHT, padx=(10, 0))
-        ttk.Button(button_frame, text="Adicionar", command=self.add_asset).pack(side=tk.RIGHT)
-        
-        # Configuração inicial
-        self.on_type_change()
-    
-    def on_type_change(self):
-        """Manipula mudança do tipo de ativo."""
-        asset_type = self.asset_type_var.get()
-        
-        if asset_type == "stock":
-            self.ticker_label.config(text="Ticker da Ação:")
-            self.symbol_frame.pack_forget()
-        else:
-            self.ticker_label.config(text="ID da Criptomoeda:")
-            self.symbol_frame.pack(fill=tk.X, pady=(0, 10), before=self.date_entry.master)
-    
-    def add_asset(self):
-        """Adiciona o ativo."""
-        try:
-            # Validar campos obrigatórios
-            ticker = self.ticker_entry.get().strip()
-            name = self.name_entry.get().strip()
-            date = self.date_entry.get().strip()
-            quantity = self.qty_entry.get().strip()
-            price = self.price_entry.get().strip()
-            
-            if not all([ticker, name, date, quantity, price]):
-                messagebox.showerror("Erro", "Todos os campos são obrigatórios!")
+        if st.button("Adicionar Ativo"):
+            if not all([display_name, identifier, purchase_date, quantity, purchase_price]):
+                st.error("Por favor, preencha todos os campos obrigatórios.")
                 return
-            
-            # Validar data
-            try:
-                datetime.strptime(date, "%Y-%m-%d")
-            except ValueError:
-                messagebox.showerror("Erro", "Data deve estar no formato YYYY-MM-DD!")
+            if asset_type == "crypto" and not symbol:
+                st.error("O Símbolo é obrigatório para criptomoedas.")
                 return
-            
-            # Validar números
-            try:
-                quantity = float(quantity)
-                price = float(price)
-                if quantity <= 0 or price <= 0:
-                    raise ValueError()
-            except ValueError:
-                messagebox.showerror("Erro", "Quantidade e preço devem ser números positivos!")
-                return
-            
-            # Criar dados do ativo
-            asset_type = self.asset_type_var.get()
-            
+
+            new_asset = {}
             if asset_type == "stock":
-                asset_data = {
-                    "ticker": ticker.upper(),
-                    "display_name": name,
-                    "purchase_date": date,
+                new_asset = {
+                    "ticker": identifier.upper(),
+                    "display_name": display_name,
+                    "purchase_date": purchase_date,
                     "quantity": quantity,
-                    "purchase_price": price
+                    "purchase_price": purchase_price
                 }
+                st.session_state.user_assets['stocks'].append(new_asset)
             else:
-                symbol = self.symbol_entry.get().strip()
-                if not symbol:
-                    messagebox.showerror("Erro", "Símbolo é obrigatório para criptomoedas!")
-                    return
-                
-                asset_data = {
-                    "id": ticker.lower(),
-                    "display_name": name,
+                new_asset = {
+                    "id": identifier.lower(),
+                    "display_name": display_name,
                     "symbol": symbol.upper(),
-                    "purchase_date": date,
+                    "purchase_date": purchase_date,
                     "quantity": quantity,
-                    "purchase_price": price
+                    "purchase_price": purchase_price
                 }
+                st.session_state.user_assets['cryptos'].append(new_asset)
             
-            # Callback para adicionar
-            self.callback({
-                'type': asset_type,
-                'data': asset_data
-            })
-            
-            self.dialog.destroy()
-            
-        except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao adicionar ativo: {str(e)}")
+            if save_user_assets(st.session_state.user_assets):
+                st.success(f"Ativo '{display_name}' adicionado com sucesso!")
+                st.rerun() # Recarrega a página para atualizar as listas
 
-def main():
-    """Função principal."""
-    root = tk.Tk()
-    app = AssetTrackerGUI(root)
+def remove_asset_form():
+    """Formulário para remover ativo."""
+    with st.expander("Remover Ativo"):
+        asset_type_to_remove = st.radio("Tipo de Ativo a Remover:", ("stock", "crypto"), key="remove_asset_type")
+        
+        options = []
+        if asset_type_to_remove == "stock":
+            options = [f"{s['display_name']} ({s['ticker']})" for s in st.session_state.user_assets['stocks']]
+        else:
+            options = [f"{c['display_name']} ({c['symbol']})" for c in st.session_state.user_assets['cryptos']]
+        
+        if not options:
+            st.info(f"Nenhuma {asset_type_to_remove} para remover.")
+            return
+
+        selected_asset_display = st.selectbox(f"Selecione o(a) {asset_type_to_remove} para remover:", options, key="remove_select")
+
+        if st.button("Remover Ativo Selecionado"):
+            if selected_asset_display:
+                if asset_type_to_remove == "stock":
+                    selected_ticker = selected_asset_display.split('(')[1][:-1]
+                    st.session_state.user_assets['stocks'] = [s for s in st.session_state.user_assets['stocks'] if s['ticker'] != selected_ticker]
+                else:
+                    selected_symbol = selected_asset_display.split('(')[1][:-1]
+                    st.session_state.user_assets['cryptos'] = [c for c in st.session_state.user_assets['cryptos'] if c['symbol'] != selected_symbol]
+                
+                if save_user_assets(st.session_state.user_assets):
+                    st.success(f"Ativo '{selected_asset_display}' removido com sucesso!")
+                    st.rerun() # Recarrega a página para atualizar as listas
+            else:
+                st.warning("Selecione um ativo para remover.")
+
+# --- Funções para Organização do Portfólio ---
+def extract_category_from_display_name(display_name):
+    """Extrai a categoria do display_name dos ativos."""
+    if ' - ' in display_name:
+        category = display_name.split(' - ')[0]
+        # Remove texto entre parênteses se houver
+        if '(' in category:
+            category = category.split('(')[0].strip()
+        return category
+    return "SEM CATEGORIA"
+
+def organize_assets_by_category(assets):
+    """Organiza ativos por categoria."""
+    categories = {}
     
-    try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        print("\nEncerrando aplicação...")
-        root.quit()
+    # Organizar ações por categoria
+    for stock in assets.get('stocks', []):
+        category = extract_category_from_display_name(stock['display_name'])
+        if category not in categories:
+            categories[category] = {'stocks': [], 'cryptos': []}
+        categories[category]['stocks'].append(stock)
+    
+    # Organizar criptomoedas (categoria CRYPTO)
+    if assets.get('cryptos'):
+        categories['CRYPTO'] = {'stocks': [], 'cryptos': assets['cryptos']}
+    
+    return categories
 
-if __name__ == "__main__":
-    main()
+def calculate_category_totals(category_assets):
+    """Calcula totais investidos e valores atuais por categoria."""
+    total_invested = 0
+    total_current = 0
+    asset_count = 0
+    
+    # Calcular para ações
+    for stock in category_assets['stocks']:
+        total_invested += stock['purchase_price'] * stock['quantity']
+        asset_count += 1
+        
+        # Obter preço atual
+        try:
+            tracker = AssetTracker("yahoo_stock", stock['ticker'], stock['display_name'])
+            current_price = tracker.get_current_price()
+            if current_price:
+                total_current += current_price * stock['quantity']
+        except:
+            total_current += stock['purchase_price'] * stock['quantity']  # Fallback
+    
+    # Calcular para criptomoedas
+    for crypto in category_assets['cryptos']:
+        total_invested += crypto['purchase_price'] * crypto['quantity']
+        asset_count += 1
+        
+        # Obter preço atual
+        try:
+            tracker = AssetTracker("coingecko", crypto['id'], crypto['display_name'])
+            current_price = tracker.get_current_price()
+            if current_price:
+                total_current += current_price * crypto['quantity']
+        except:
+            total_current += crypto['purchase_price'] * crypto['quantity']  # Fallback
+    
+    return {
+        'total_invested': total_invested,
+        'total_current': total_current,
+        'asset_count': asset_count,
+        'profit_loss': total_current - total_invested,
+        'profit_loss_pct': ((total_current - total_invested) / total_invested * 100) if total_invested > 0 else 0
+    }
+
+def show_portfolio_overview():
+    """Mostra visão geral organizada do portfólio."""
+    st.title("📊 Visão Geral do Portfólio")
+    
+    categories = organize_assets_by_category(st.session_state.user_assets)
+    
+    if not categories:
+        st.info("Nenhum ativo encontrado no portfólio.")
+        return
+    
+    # Calcular totais gerais
+    total_portfolio_invested = 0
+    total_portfolio_current = 0
+    total_assets = 0
+    
+    # Métricas gerais
+    col1, col2, col3, col4 = st.columns(4)
+    
+    category_data = {}
+    for category_name, category_assets in categories.items():
+        totals = calculate_category_totals(category_assets)
+        category_data[category_name] = totals
+        total_portfolio_invested += totals['total_invested']
+        total_portfolio_current += totals['total_current']
+        total_assets += totals['asset_count']
+    
+    with col1:
+        st.metric("💰 Total Investido", f"${total_portfolio_invested:,.2f}")
+    
+    with col2:
+        st.metric("📈 Valor Atual", f"${total_portfolio_current:,.2f}")
+    
+    with col3:
+        portfolio_pnl = total_portfolio_current - total_portfolio_invested
+        portfolio_pnl_pct = (portfolio_pnl / total_portfolio_invested * 100) if total_portfolio_invested > 0 else 0
+        st.metric("💵 P&L Total", f"${portfolio_pnl:,.2f}", f"{portfolio_pnl_pct:+.2f}%")
+    
+    with col4:
+        st.metric("🏢 Total de Ativos", total_assets)
+    
+    st.markdown("---")
+    
+    # Exibir por categoria
+    for category_name, totals in category_data.items():
+        with st.expander(f"📂 {category_name} ({totals['asset_count']} ativos)", expanded=True):
+            
+            # Métricas da categoria
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Investido", f"${totals['total_invested']:,.2f}")
+            
+            with col2:
+                st.metric("Valor Atual", f"${totals['total_current']:,.2f}")
+            
+            with col3:
+                pnl_color = "normal"
+                if totals['profit_loss'] > 0:
+                    pnl_color = "inverse"
+                elif totals['profit_loss'] < 0:
+                    pnl_color = "off"
+                st.metric("P&L", f"${totals['profit_loss']:,.2f}", 
+                         f"{totals['profit_loss_pct']:+.2f}%")
+            
+            with col4:
+                weight = (totals['total_invested'] / total_portfolio_invested * 100) if total_portfolio_invested > 0 else 0
+                st.metric("Peso no Portfolio", f"{weight:.1f}%")
+            
+            # Lista de ativos da categoria
+            category_assets = categories[category_name]
+            
+            if category_assets['stocks']:
+                st.write("**📈 Ações:**")
+                for stock in category_assets['stocks']:
+                    col_name, col_ticker, col_qty, col_price, col_total = st.columns([3, 1, 1, 1, 1])
+                    
+                    with col_name:
+                        clean_name = stock['display_name'].split(' - ')[1] if ' - ' in stock['display_name'] else stock['display_name']
+                        st.write(f"• {clean_name}")
+                    
+                    with col_ticker:
+                        st.write(f"`{stock['ticker']}`")
+                    
+                    with col_qty:
+                        st.write(f"{stock['quantity']}")
+                    
+                    with col_price:
+                        st.write(f"${stock['purchase_price']:.2f}")
+                    
+                    with col_total:
+                        total_value = stock['purchase_price'] * stock['quantity']
+                        st.write(f"${total_value:,.2f}")
+            
+            if category_assets['cryptos']:
+                st.write("**₿ Criptomoedas:**")
+                for crypto in category_assets['cryptos']:
+                    col_name, col_symbol, col_qty, col_price, col_total = st.columns([3, 1, 1, 1, 1])
+                    
+                    with col_name:
+                        st.write(f"• {crypto['display_name']}")
+                    
+                    with col_symbol:
+                        st.write(f"`{crypto['symbol']}`")
+                    
+                    with col_qty:
+                        st.write(f"{crypto['quantity']}")
+                    
+                    with col_price:
+                        st.write(f"${crypto['purchase_price']:,.2f}")
+                    
+                    with col_total:
+                        total_value = crypto['purchase_price'] * crypto['quantity']
+                        st.write(f"${total_value:,.2f}")
+    
+    # Gráfico de distribuição do portfólio
+    st.markdown("---")
+    st.subheader("📊 Distribuição do Portfólio por Categoria")
+    
+    if category_data:
+        # Preparar dados para o gráfico
+        chart_data = []
+        for category, totals in category_data.items():
+            chart_data.append({
+                'Categoria': category,
+                'Valor Investido': totals['total_invested'],
+                'Valor Atual': totals['total_current']
+            })
+        
+        df_chart = pd.DataFrame(chart_data)
+        
+        # Gráfico de pizza para distribuição
+        fig_pie = px.pie(df_chart, values='Valor Investido', names='Categoria',
+                        title='Distribuição do Investimento por Categoria')
+        st.plotly_chart(fig_pie, use_container_width=True)
+        
+        # Gráfico de barras comparativo
+        fig_bar = px.bar(df_chart, x='Categoria', y=['Valor Investido', 'Valor Atual'],
+                        title='Comparação: Valor Investido vs Valor Atual por Categoria',
+                        barmode='group')
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+# --- Layout Principal do Streamlit ---
+st.set_page_config(layout="wide", page_title="Monitor de Ativos")
+
+# Navegação de páginas
+page = st.sidebar.selectbox("📍 Navegar para:", 
+                           ["🏠 Monitor Principal", "📊 Visão Geral do Portfólio"], 
+                           key="page_navigation")
+
+if page == "📊 Visão Geral do Portfólio":
+    show_portfolio_overview()
+else:
+    # Página principal (monitor de ativos)
+    st.title("Monitor de Ativos")
+
+    # Barra Lateral
+    st.sidebar.title("Meus Ativos")
+
+    selected_asset = None
+    selected_api_choice = None
+
+    # Abas na barra lateral para Ações e Criptomoedas
+    tab_stocks, tab_cryptos = st.sidebar.tabs(["Ações", "Criptomoedas"])
+
+    with tab_stocks:
+        if st.session_state.user_assets['stocks']:
+            stock_options = [f"{s['display_name']} ({s['ticker']})" for s in st.session_state.user_assets['stocks']]
+            selected_stock_display = st.selectbox("Selecione uma ação:", [""] + stock_options, key="select_stock")
+            if selected_stock_display:
+                ticker_selected = selected_stock_display.split('(')[1][:-1]
+                selected_asset = next((s for s in st.session_state.user_assets['stocks'] if s['ticker'] == ticker_selected), None)
+                selected_api_choice = "yahoo_stock"
+        else:
+            st.info("Nenhuma ação cadastrada.")
+
+    with tab_cryptos:
+        if st.session_state.user_assets['cryptos']:
+            crypto_options = [f"{c['display_name']} ({c['symbol']})" for c in st.session_state.user_assets['cryptos']]
+            selected_crypto_display = st.selectbox("Selecione uma criptomoeda:", [""] + crypto_options, key="select_crypto")
+            if selected_crypto_display:
+                symbol_selected = selected_crypto_display.split('(')[1][:-1]
+                selected_asset = next((c for c in st.session_state.user_assets['cryptos'] if c['symbol'] == symbol_selected), None)
+                selected_api_choice = "coingecko"
+        else:
+            st.info("Nenhuma criptomoeda cadastrada.")
+
+    # Controles de período do gráfico na barra lateral
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Configurações do Gráfico")
+    current_period_key = st.sidebar.selectbox("Período do Gráfico:", list(CHART_PERIODS.keys()), key="chart_period_select")
+    selected_period_days = CHART_PERIODS[current_period_key]
+
+    # Se um ativo for selecionado, carrega e exibe os dados
+    current_tracker = None
+    current_price = None
+    historical_data = pd.Series()
+
+    if selected_asset and selected_api_choice:
+        identifier = selected_asset.get('ticker') or selected_asset.get('id')
+        display_symbol = selected_asset.get('display_name') or selected_asset.get('symbol')
+        
+        current_tracker = AssetTracker(
+            api_choice=selected_api_choice,
+            identifier=identifier,
+            display_symbol=display_symbol,
+            purchase_date=selected_asset.get('purchase_date'),
+            quantity=selected_asset.get('quantity'),
+            purchase_price=selected_asset.get('purchase_price')
+        )
+        
+        st.sidebar.markdown("---")
+        if st.sidebar.button("Atualizar Dados"):
+            st.rerun() # Força o recarregamento dos dados
+
+        # Placeholder para a mensagem de carregamento
+        loading_message_placeholder = st.empty()
+        loading_message_placeholder.info("Carregando dados, por favor aguarde...")
+        
+        current_price = current_tracker.get_current_price()
+        historical_data = current_tracker.get_historical_data(selected_period_days)
+        
+        loading_message_placeholder.empty() # Limpa a mensagem de "carregando"
+        
+        display_asset_info(current_tracker, current_price, historical_data, current_period_key)
+
+    else:
+        st.info("Selecione um ativo na barra lateral para visualizar informações.")
+
+    # Seção de Busca de Ativos
+    st.markdown("---")
+    st.header("Buscar Ativo Personalizado")
+
+    col_search1, col_search2, col_search3 = st.columns([0.2, 0.4, 0.2])
+
+    # Adiciona um placeholder para os resultados da busca
+    search_results_placeholder = st.empty()
+
+    with col_search1:
+        search_asset_type = st.radio("Tipo:", ("crypto", "stock"), key="search_asset_type")
+
+    with col_search2:
+        search_term = st.text_input(f"{'ID da Criptomoeda' if search_asset_type == 'crypto' else 'Ticker da Ação'}:", key="search_term_input")
+
+    with col_search3:
+        st.write("") # Espaço para alinhar o botão
+        st.write("") # Espaço para alinhar o botão
+        if st.button("Buscar Ativo"):
+            search_results_placeholder.empty() # Limpa resultados anteriores ao iniciar nova busca
+            with search_results_placeholder.container(): # Usa o container para exibir os novos resultados
+                if search_term:
+                    api_choice_search = "coingecko" if search_asset_type == "crypto" else "yahoo_stock"
+                    identifier_search = search_term.lower() if search_asset_type == "crypto" else search_term.upper()
+                    display_name_search = search_term.upper() # Usar o próprio termo de busca como display name
+                    
+                    # Criar um AssetTracker temporário para a busca
+                    searched_tracker = AssetTracker(
+                        api_choice=api_choice_search,
+                        identifier=identifier_search,
+                        display_symbol=display_name_search
+                    )
+                    
+                    search_loading_placeholder = st.empty()
+                    search_loading_placeholder.info(f"Buscando informações para {display_name_search}...")
+                    
+                    searched_price = searched_tracker.get_current_price()
+                    searched_historical_data = searched_tracker.get_historical_data(CHART_PERIODS[current_period_key])
+
+                    search_loading_placeholder.empty() # Limpa a mensagem de "buscando"
+
+                    if searched_price is not None or not searched_historical_data.empty:
+                        st.subheader(f"Resultado da Busca: {display_name_search}")
+                        st.write(f"**💰 Preço atual:** {searched_tracker.format_price(searched_price)}")
+                        
+                        if not searched_historical_data.empty:
+                            fig_search = px.line(searched_historical_data, x=searched_historical_data.index, y=searched_historical_data.values,
+                                                 title=f'{display_name_search} - Histórico',
+                                                 labels={'x': 'Data', 'y': 'Preço (USD)'})
+                            fig_search.update_layout(hovermode="x unified")
+                            st.plotly_chart(fig_search, use_container_width=True)
+                        else:
+                            st.warning("Não foi possível obter dados históricos para este ativo.")
+
+                        search_chart_link = searched_tracker.get_chart_link()
+                        if search_chart_link:
+                            st.markdown(f"[Ver Gráfico Completo]({search_chart_link})", unsafe_allow_html=True)
+
+                    else:
+                        st.warning(f"Não foi possível encontrar informações para '{search_term}'. Verifique o Ticker/ID.")
+                else:
+                    st.warning("Por favor, digite um Ticker/ID para buscar.")
+
+    # Formulários de Adicionar/Remover Ativos
+    st.sidebar.markdown("---")
+    add_asset_form()
+    remove_asset_form()
+
+# Exibir visão geral do portfólio
+st.sidebar.markdown("---")
+if st.sidebar.button("Visão Geral do Portfólio"):
+    show_portfolio_overview()

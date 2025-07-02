@@ -1,18 +1,116 @@
 {
   "stocks": [
     {
-      "ticker": "PETR4.SA",
-      "display_name": "Petrobras",
-      "purchase_date": "2023-01-15",
-      "quantity": 100,
-      "purchase_price": 25.0
+      "ticker": "AMGN34.SA",
+      "display_name": "BIOTECH - Amgen",
+      "purchase_date": "2025-01-01",
+      "quantity": 1.0,
+      "purchase_price": 54.29
     },
     {
-      "ticker": "ITSA4.SA",
-      "display_name": "Itausa",
-      "purchase_date": "2024-03-01",
-      "quantity": 200,
-      "purchase_price": 9.5
+      "ticker": "BIOM3.SA",
+      "display_name": "SAUDE - Biomm",
+      "purchase_date": "2025-01-01",
+      "quantity": 2.0,
+      "purchase_price": 7.07
+    },
+    {
+      "ticker": "CMIG4.SA",
+      "display_name": "ENERGIA - (MG) CEMIG",
+      "purchase_date": "2025-01-01",
+      "quantity": 1.0,
+      "purchase_price": 10.41
+    },
+    {
+      "ticker": "CMIN3.SA",
+      "display_name": "MINERIO - CSN",
+      "purchase_date": "2025-01-01",
+      "quantity": 2.0,
+      "purchase_price": 4.91
+    },
+    {
+      "ticker": "CPFE3.SA",
+      "display_name": "ENERGIA - CPFL",
+      "purchase_date": "2025-01-01",
+      "quantity": 2.0,
+      "purchase_price": 35.52
+    },
+    {
+      "ticker": "CPLE6.SA",
+      "display_name": "ENERGIA - (PR) Copel",
+      "purchase_date": "2025-01-01",
+      "quantity": 3.0,
+      "purchase_price": 10.09
+    },
+    {
+      "ticker": "EGIE3.SA",
+      "display_name": "ENERGIA - ENGIE",
+      "purchase_date": "2025-01-01",
+      "quantity": 4.0,
+      "purchase_price": 43.53
+    },
+    {
+      "ticker": "ENEV3.SA",
+      "display_name": "ENERGIA - ENEVA",
+      "purchase_date": "2025-01-01",
+      "quantity": 3.0,
+      "purchase_price": 13.58
+    },
+    {
+      "ticker": "EQTL3.SA",
+      "display_name": "ENERGIA - Equatorial",
+      "purchase_date": "2025-01-01",
+      "quantity": 2.0,
+      "purchase_price": 32.41
+    },
+    {
+      "ticker": "FLRY3.SA",
+      "display_name": "SAUDE - Fleury",
+      "purchase_date": "2025-01-01",
+      "quantity": 1.0,
+      "purchase_price": 12.72
+    },
+    {
+      "ticker": "GGBR4.SA",
+      "display_name": "MINERIO - GGBR4",
+      "purchase_date": "2025-01-01",
+      "quantity": 3.0,
+      "purchase_price": 16.58
+    },
+    {
+      "ticker": "RADL3.SA",
+      "display_name": "SAUDE - Raia Drogasil",
+      "purchase_date": "2025-01-01",
+      "quantity": 2.0,
+      "purchase_price": 15.05
+    },
+    {
+      "ticker": "SAPR4.SA",
+      "display_name": "SANEAMENTO - (PR) SAPR4",
+      "purchase_date": "2025-01-01",
+      "quantity": 2.0,
+      "purchase_price": 5.76
+    },
+    {
+      "ticker": "SBSP3.SA",
+      "display_name": "SANEAMENTO - (SP) Sabesp",
+      "purchase_date": "2025-01-01",
+      "quantity": 4.0,
+      "purchase_price": 107.57
+    },
+    {
+      "ticker": "TAEE11.SA",
+      "display_name": "ENERGIA - (RJ) TAESA",
+      "purchase_date": "2025-01-01",
+      "quantity": 3.0,
+      "purchase_price": 34.32
+    },
+    {
+      "ticker": "VALE3.SA",
+      "display_name": "MINERIO - VALE3",
+      "purchase_date": "2025-01-01",
+      "quantity": 3.0,
+      "purchase_price": 34.32
     }
   ],
   "cryptos": [
@@ -21,16 +119,24 @@
       "display_name": "Bitcoin",
       "symbol": "BTC",
       "purchase_date": "2022-06-20",
-      "quantity": 0.05,
-      "purchase_price": 20000.0
+      "quantity": 0.0,
+      "purchase_price": 106000.0
     },
     {
       "id": "ethereum",
       "display_name": "Ethereum",
       "symbol": "ETH",
       "purchase_date": "2023-11-10",
-      "quantity": 0.5,
-      "purchase_price": 2000.0
+      "quantity": 0.01,
+      "purchase_price": 1900.0
+    },
+    {
+      "id": "solana",
+      "display_name": "Solana",
+      "symbol": "SOL",
+      "purchase_date": "2023-11-10",
+      "quantity": 0.01,
+      "purchase_price": 17000.0
     }
   ]
 }
