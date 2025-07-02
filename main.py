@@ -613,7 +613,11 @@ def show_portfolio_overview():
             st.info("Dados insuficientes para gerar gráficos de distribuição.")
 
 # --- Layout Principal do Streamlit ---
-st.set_page_config(layout="wide", page_title="Monitor de Ativos")
+st.set_page_config(
+    layout="wide", 
+    page_title="Monitor de Ativos",
+    page_icon="3890929-chart-growth-invest-market-stock_111188.ico"
+)
 
 # Navegação de páginas
 page = st.sidebar.selectbox("📍 Navegar para:", 
