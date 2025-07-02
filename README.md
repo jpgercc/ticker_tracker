@@ -2,6 +2,8 @@
 
 Um aplicativo web desenvolvido em Streamlit para monitoramento de ações e criptomoedas em tempo real.
 
+![Image](https://github.com/user-attachments/assets/f538444a-c2a8-4027-a3e8-d89283630317)
+
 ## O que o app faz
 
 - **Monitora preços** de ações brasileiras e criptomoedas em tempo real
