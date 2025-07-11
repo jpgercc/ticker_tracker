@@ -616,7 +616,7 @@ def show_portfolio_overview():
 st.set_page_config(
     layout="wide", 
     page_title="Monitor de Ativos",
-    page_icon="3890929-chart-growth-invest-market-stock_111188.ico"
+    page_icon="favico.ico"
 )
 
 # Navegação de páginas
