@@ -1,5 +1,9 @@
 # Monitor de Ativos
 
+Talvez você ache mais util o projeto <a href='https://github.com/jpgercc/automation_hub/tree/main/%F0%9F%92%B0%20Cash/stalk_any_stock_ultimate_version'>stalk_any_stock</a>
+
+---
+
 Um aplicativo web desenvolvido em Streamlit para monitoramento de ações e criptomoedas em tempo real.
 
 ![Image](https://github.com/user-attachments/assets/0aea8633-fb1b-464e-845c-574ef21a8e7a)
@@ -40,3 +44,4 @@ O app será aberto automaticamente em `http://localhost:8501`
 - Ajuste o **período do gráfico** para diferentes análises temporais
 
 > Os dados são obtidos via Yahoo Finance (ações) e CoinGecko (criptomoedas)
+
